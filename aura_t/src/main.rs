@@ -12,6 +12,6 @@ fn main() {
         interpreter.prompt();
         interpreter.had_error = false;
     } else {
-        println!("Usage: mmt [script]");
+        println!("Usage: at [script]");
     }
 }
