@@ -1,5 +1,5 @@
 [workspace]
-members = ["mmt"]
+members = ["aura_t"]
 resolver = "2"
 
 [workspace.dependencies]

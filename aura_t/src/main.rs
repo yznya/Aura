@@ -1,6 +1,6 @@
 use std::env;
 
-use mmt::Interpreter;
+use at::Interpreter;
 
 fn main() {
     let args: Vec<_> = env::args().collect();
