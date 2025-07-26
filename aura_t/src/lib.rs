@@ -4,7 +4,9 @@ use std::{
     fmt::Display,
     fs,
     io::{self},
+    iter::Peekable,
     path::Path,
+    slice::Iter,
     sync::LazyLock,
 };
 use thiserror::Error;
@@ -64,9 +66,14 @@ impl Interpreter {
             }
         };
 
-        for token in tokens {
-            println!("{}", token);
-        }
+        let ast = match Parser::parse(tokens.iter().peekable()) {
+            Ok(t) => t,
+            Err(e @ ParseError::SyntaxError(line)) => {
+                self.report_error(line, "", &e.to_string());
+                return;
+            }
+        };
+        println!("{ast:#?}");
     }
 
     fn report_error(&self, line: u32, location: &str, message: &str) {
@@ -74,6 +81,188 @@ impl Interpreter {
     }
 }
 
+// Parser
+#[derive(Debug, Clone)]
+enum Expr {
+    Binary {
+        left: Box<Expr>,
+        operator: Token,
+        right: Box<Expr>,
+    },
+    Grouping {
+        expression: Box<Expr>,
+    },
+    Unary {
+        operator: Token,
+        right: Box<Expr>,
+    },
+    Literal {
+        value: Token,
+    },
+}
+
+#[derive(Error, Debug)]
+enum ParseError {
+    #[error("Syntax error at line {0}")]
+    SyntaxError(u32),
+}
+
+struct Parser<'a> {
+    tokens: Peekable<Iter<'a, Token>>,
+}
+
+impl<'a> Parser<'a> {
+    fn parse(tokens: Peekable<Iter<'a, Token>>) -> Result<Expr, ParseError> {
+        let mut parser = Parser { tokens };
+
+        parser.expr()
+    }
+
+    fn expr(&mut self) -> Result<Expr, ParseError> {
+        self.equality()
+    }
+
+    fn equality(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.comparison()?;
+
+        while let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+            && (token.token_type == TokenType::BangEqual
+                || token.token_type == TokenType::EqualEqual)
+        {
+            let operator = token.clone();
+            self.tokens.next();
+            let right = self.comparison()?;
+
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn comparison(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.term()?;
+
+        while let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+            && (token.token_type == TokenType::Greater
+                || token.token_type == TokenType::GreaterEqual
+                || token.token_type == TokenType::Less
+                || token.token_type == TokenType::LessEqual)
+        {
+            let operator = token.clone();
+            self.tokens.next();
+            let right = self.term()?;
+
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn term(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.factor()?;
+
+        while let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+            && (token.token_type == TokenType::Plus || token.token_type == TokenType::Minus)
+        {
+            let operator = token.clone();
+            self.tokens.next();
+            let right = self.factor()?;
+
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn factor(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.unary()?;
+
+        while let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+            && (token.token_type == TokenType::Star || token.token_type == TokenType::Slash)
+        {
+            let operator = token.clone();
+            self.tokens.next();
+            let right = self.unary()?;
+
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn unary(&mut self) -> Result<Expr, ParseError> {
+        while let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+            && (token.token_type == TokenType::Bang || token.token_type == TokenType::Minus)
+        {
+            let operator = token.clone();
+            self.tokens.next();
+            let right = self.primary()?;
+
+            return Ok(Expr::Unary {
+                operator,
+                right: Box::new(right),
+            });
+        }
+        self.primary()
+    }
+
+    fn primary(&mut self) -> Result<Expr, ParseError> {
+        if let Some(&token) = self.tokens.peek()
+            && token.token_type != TokenType::Eof
+        {
+            let token_type = token.token_type;
+            if token_type == TokenType::False
+                || token_type == TokenType::True
+                || token_type == TokenType::Number
+                || token_type == TokenType::String
+                || token_type == TokenType::Nil
+            {
+                self.tokens.next();
+
+                return Ok(Expr::Literal {
+                    value: token.clone(),
+                });
+            }
+
+            if token_type == TokenType::LeftParen {
+                self.tokens.next();
+                let expr = self.expr()?;
+
+                if let Some(&token) = self.tokens.peek() {
+                    if token.token_type == TokenType::RightParen {
+                        self.tokens.next();
+                        return Ok(Expr::Grouping {
+                            expression: Box::new(expr),
+                        });
+                    }
+                }
+            }
+        }
+
+        Err(ParseError::SyntaxError(
+            self.tokens.peek().map(|t| t.line).unwrap_or(0),
+        ))
+    }
+}
+
+// Scanner
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum TokenType {
     LeftParen,
@@ -117,7 +306,7 @@ enum TokenType {
     Eof,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Literal {
     StringLiteral(String),
     NumberLiteral(f64),
@@ -136,7 +325,7 @@ impl Display for Literal {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Token {
     token_type: TokenType,
     lexeme: String,
