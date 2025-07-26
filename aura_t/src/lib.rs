@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     collections::HashMap,
-    fmt::Display,
+    fmt::{Display, Formatter},
     fs,
     io::{self},
     iter::Peekable,
@@ -72,39 +72,203 @@ impl Interpreter {
                 self.report_error(line, "", &e.to_string());
                 return;
             }
+            Err(e @ ParseError::TypeMismatch(line)) => {
+                self.report_error(line, "", &e.to_string());
+                return;
+            }
         };
-        println!("{ast:#?}");
+
+        match self.evaluate(ast) {
+            Ok(t) => {
+                println!("{t}")
+            }
+            Err(e @ ParseError::SyntaxError(line)) => {
+                self.report_error(line, "", &e.to_string());
+                return;
+            }
+            Err(e @ ParseError::TypeMismatch(line)) => {
+                self.report_error(line, "", &e.to_string());
+                return;
+            }
+        };
     }
 
-    fn report_error(&self, line: u32, location: &str, message: &str) {
+    fn evaluate(&mut self, expr: Expr) -> Result<Value, ParseError> {
+        match expr.expr_type {
+            ExprType::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                let left = self.evaluate(*left)?;
+                let right = self.evaluate(*right)?;
+
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => match operator {
+                        BinaryOperator::Plus => return Ok(Value::Number(l + r)),
+                        BinaryOperator::Minus => return Ok(Value::Number(l - r)),
+                        BinaryOperator::Star => return Ok(Value::Number(l * r)),
+                        BinaryOperator::Slash => return Ok(Value::Number(l / r)),
+                        BinaryOperator::Greater => return Ok(Value::Boolean(l > r)),
+                        BinaryOperator::GreaterEqual => return Ok(Value::Boolean(l >= r)),
+                        BinaryOperator::Less => return Ok(Value::Boolean(l < r)),
+                        BinaryOperator::LessEqual => return Ok(Value::Boolean(l <= r)),
+                        _ => unreachable!(),
+                    },
+                    _ => return Err(ParseError::TypeMismatch(expr.token.line)),
+                }
+            }
+            ExprType::Grouping { expression } => {
+                return self.evaluate(*expression);
+            }
+            ExprType::Unary { operator, right } => {
+                let right = self.evaluate(*right)?;
+
+                match operator {
+                    UnaryOperator::Bang => match right {
+                        Value::Boolean(b) => Ok(Value::Boolean(!b)),
+                        _ => Err(ParseError::TypeMismatch(expr.token.line)),
+                    },
+                    UnaryOperator::Minus => match right {
+                        Value::Number(v) => Ok(Value::Number(-v)),
+                        _ => Err(ParseError::TypeMismatch(expr.token.line)),
+                    },
+                }
+            }
+            ExprType::Literal { value } => match expr.token.token_type {
+                TokenType::String => Ok(value.unwrap()),
+                TokenType::Number => Ok(value.unwrap()),
+                TokenType::True => Ok(Value::Boolean(true)),
+                TokenType::False => Ok(Value::Boolean(false)),
+                _ => panic!("Invalid state"),
+            },
+        }
+    }
+
+    fn report_error(&mut self, line: u32, location: &str, message: &str) {
+        self.had_error = true;
         println!("[{location} line {line}] Error: {message}");
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Value {
+    Number(f64),
+    String(String),
+    Boolean(bool),
+}
+
+impl From<Literal> for Value {
+    fn from(literal: Literal) -> Self {
+        match literal {
+            Literal::NumberLiteral(v) => Value::Number(v),
+            Literal::StringLiteral(v) => Value::String(v),
+        }
+    }
+}
+
+impl From<&Literal> for Value {
+    fn from(literal: &Literal) -> Self {
+        match literal {
+            Literal::NumberLiteral(v) => Value::Number(v.clone()),
+            Literal::StringLiteral(v) => Value::String(v.clone()),
+        }
+    }
+}
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number(v) => write!(f, "{v}"),
+            Value::String(v) => write!(f, "{v}"),
+            Value::Boolean(v) => write!(f, "{v}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum BinaryOperator {
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    BangEqual,
+    EqualEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    And,
+    Or,
+}
+
+impl From<TokenType> for BinaryOperator {
+    fn from(value: TokenType) -> Self {
+        match value {
+            TokenType::Plus => BinaryOperator::Plus,
+            TokenType::Minus => BinaryOperator::Minus,
+            TokenType::Star => BinaryOperator::Star,
+            TokenType::Slash => BinaryOperator::Slash,
+            TokenType::BangEqual => BinaryOperator::BangEqual,
+            TokenType::EqualEqual => BinaryOperator::EqualEqual,
+            TokenType::Greater => BinaryOperator::Greater,
+            TokenType::GreaterEqual => BinaryOperator::GreaterEqual,
+            TokenType::Less => BinaryOperator::Less,
+            TokenType::LessEqual => BinaryOperator::LessEqual,
+            TokenType::And => BinaryOperator::And,
+            TokenType::Or => BinaryOperator::Or,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum UnaryOperator {
+    Minus,
+    Bang,
+}
+
+impl From<TokenType> for UnaryOperator {
+    fn from(value: TokenType) -> Self {
+        match value {
+            TokenType::Minus => UnaryOperator::Minus,
+            TokenType::Bang => UnaryOperator::Bang,
+            _ => unreachable!(),
+        }
     }
 }
 
 // Parser
 #[derive(Debug, Clone)]
-enum Expr {
+enum ExprType {
     Binary {
         left: Box<Expr>,
-        operator: Token,
+        operator: BinaryOperator,
         right: Box<Expr>,
     },
     Grouping {
         expression: Box<Expr>,
     },
     Unary {
-        operator: Token,
+        operator: UnaryOperator,
         right: Box<Expr>,
     },
     Literal {
-        value: Token,
+        value: Option<Value>,
     },
+}
+
+#[derive(Debug, Clone)]
+struct Expr {
+    expr_type: ExprType,
+    token: Token,
 }
 
 #[derive(Error, Debug)]
 enum ParseError {
     #[error("Syntax error at line {0}")]
     SyntaxError(u32),
+    #[error("Type mismatch at line {0}")]
+    TypeMismatch(u32),
 }
 
 struct Parser<'a> {
@@ -130,14 +294,16 @@ impl<'a> Parser<'a> {
             && (token.token_type == TokenType::BangEqual
                 || token.token_type == TokenType::EqualEqual)
         {
-            let operator = token.clone();
             self.tokens.next();
             let right = self.comparison()?;
 
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                operator,
-                right: Box::new(right),
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::Binary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
             };
         }
         Ok(expr)
@@ -153,14 +319,16 @@ impl<'a> Parser<'a> {
                 || token.token_type == TokenType::Less
                 || token.token_type == TokenType::LessEqual)
         {
-            let operator = token.clone();
             self.tokens.next();
             let right = self.term()?;
 
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                operator,
-                right: Box::new(right),
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::Binary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
             };
         }
         Ok(expr)
@@ -173,14 +341,16 @@ impl<'a> Parser<'a> {
             && token.token_type != TokenType::Eof
             && (token.token_type == TokenType::Plus || token.token_type == TokenType::Minus)
         {
-            let operator = token.clone();
             self.tokens.next();
             let right = self.factor()?;
 
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                operator,
-                right: Box::new(right),
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::Binary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
             };
         }
         Ok(expr)
@@ -193,14 +363,16 @@ impl<'a> Parser<'a> {
             && token.token_type != TokenType::Eof
             && (token.token_type == TokenType::Star || token.token_type == TokenType::Slash)
         {
-            let operator = token.clone();
             self.tokens.next();
             let right = self.unary()?;
 
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                operator,
-                right: Box::new(right),
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::Binary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
             };
         }
         Ok(expr)
@@ -211,13 +383,15 @@ impl<'a> Parser<'a> {
             && token.token_type != TokenType::Eof
             && (token.token_type == TokenType::Bang || token.token_type == TokenType::Minus)
         {
-            let operator = token.clone();
             self.tokens.next();
             let right = self.primary()?;
 
-            return Ok(Expr::Unary {
-                operator,
-                right: Box::new(right),
+            return Ok(Expr {
+                token: token.clone(),
+                expr_type: ExprType::Unary {
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
             });
         }
         self.primary()
@@ -236,8 +410,11 @@ impl<'a> Parser<'a> {
             {
                 self.tokens.next();
 
-                return Ok(Expr::Literal {
-                    value: token.clone(),
+                return Ok(Expr {
+                    token: token.clone(),
+                    expr_type: ExprType::Literal {
+                        value: token.literal.as_ref().map(|literal| literal.into()),
+                    },
                 });
             }
 
@@ -248,8 +425,11 @@ impl<'a> Parser<'a> {
                 if let Some(&token) = self.tokens.peek() {
                     if token.token_type == TokenType::RightParen {
                         self.tokens.next();
-                        return Ok(Expr::Grouping {
-                            expression: Box::new(expr),
+                        return Ok(Expr {
+                            token: token.clone(),
+                            expr_type: ExprType::Grouping {
+                                expression: Box::new(expr),
+                            },
                         });
                     }
                 }
