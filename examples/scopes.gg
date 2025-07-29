@@ -1,0 +1,19 @@
+let x = 3;
+{
+    let x = 5;
+    print x;
+}
+print x;
+
+{
+    print x;
+    let x = 7;
+    print x;
+    {
+        let x = 9;
+        print x;
+    }
+    print x;
+}
+
+print x;
