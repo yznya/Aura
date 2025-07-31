@@ -3,12 +3,11 @@ use crate::parser::{
     BinaryOperator, Expr, ExprType, ParseError, Parser, Stmt, UnaryOperator, Value,
 };
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::{
-    fmt::{Display, Formatter},
     fs,
     io::{self},
     path::Path,
-    slice::Iter,
 };
 use thiserror::Error;
 
@@ -106,6 +105,42 @@ impl Interpreter {
                 }
                 self.environment.end_scope();
             }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let value = self.evaluate_expr(condition)?;
+                if let Value::Boolean(value) = value {
+                    if value {
+                        self.evaluate(then_branch)?;
+                    } else if let Some(else_branch) = else_branch {
+                        self.evaluate(else_branch)?;
+                    }
+                } else {
+                    return Err(RuntimeError::TypeMismatch(condition.token.line));
+                }
+            }
+            Stmt::While {
+                condition,
+                loop_block,
+            } => loop {
+                let value = if let Some(condition) = condition {
+                    self.evaluate_expr(condition)?
+                } else {
+                    Value::Boolean(false)
+                };
+
+                if let Value::Boolean(value) = value {
+                    if value {
+                        self.evaluate(loop_block)?;
+                    } else {
+                        break;
+                    }
+                } else {
+                    return Err(RuntimeError::TypeMismatch(0));
+                }
+            },
         };
 
         Ok(())
@@ -118,22 +153,59 @@ impl Interpreter {
                 operator,
                 right,
             } => {
-                let left = self.evaluate_expr(left.as_ref())?;
-                let right = self.evaluate_expr(right.as_ref())?;
+                let left = self.evaluate_expr(left)?;
+                let right = self.evaluate_expr(right)?;
 
-                match (left, right) {
-                    (Value::Number(l), Value::Number(r)) => match operator {
-                        BinaryOperator::Plus => Ok(Value::Number(l + r)),
-                        BinaryOperator::Minus => Ok(Value::Number(l - r)),
-                        BinaryOperator::Star => Ok(Value::Number(l * r)),
-                        BinaryOperator::Slash => Ok(Value::Number(l / r)),
-                        BinaryOperator::Greater => Ok(Value::Boolean(l > r)),
-                        BinaryOperator::GreaterEqual => Ok(Value::Boolean(l >= r)),
-                        BinaryOperator::Less => Ok(Value::Boolean(l < r)),
-                        BinaryOperator::LessEqual => Ok(Value::Boolean(l <= r)),
-                        _ => unreachable!(),
+                match operator {
+                    BinaryOperator::Plus => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Number(l + r))
+                    }
+                    BinaryOperator::Minus => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Number(l - r))
+                    }
+                    BinaryOperator::Star => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Number(l * r))
+                    }
+                    BinaryOperator::Slash => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Number(l / r))
+                    }
+                    BinaryOperator::Greater => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l > r))
+                    }
+                    BinaryOperator::GreaterEqual => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l >= r))
+                    }
+                    BinaryOperator::Less => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l < r))
+                    }
+                    BinaryOperator::LessEqual => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l <= r))
+                    }
+                    BinaryOperator::EqualEqual => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l == r))
+                    }
+                    BinaryOperator::BangEqual => {
+                        arithmetic_binary_op(left, right, |l, r| Value::Boolean(l != r))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ExprType::LogicalBinary {
+                left,
+                operator,
+                right,
+            } => {
+                let left = self.evaluate_expr(left.as_ref())?;
+                match operator {
+                    BinaryOperator::And => match left {
+                        Value::Boolean(false) => Ok(Value::Boolean(false)),
+                        _ => self.evaluate_expr(right.as_ref()),
                     },
-                    _ => Err(RuntimeError::TypeMismatch(expr.token.line)),
+                    BinaryOperator::Or => match left {
+                        Value::Boolean(true) => Ok(Value::Boolean(true)),
+                        _ => self.evaluate_expr(right.as_ref()),
+                    },
+                    _ => unreachable!(),
                 }
             }
             ExprType::Grouping { expression } => self.evaluate_expr(expression.as_ref()),
@@ -176,6 +248,17 @@ impl Interpreter {
     fn report_error(&mut self, line: u32, location: &str, message: &str) {
         self.had_error = true;
         println!("[{location} line {line}] Error: {message}");
+    }
+}
+
+fn arithmetic_binary_op(
+    left: Value,
+    right: Value,
+    func: impl Fn(f64, f64) -> Value,
+) -> Result<Value, RuntimeError> {
+    match (left, right) {
+        (Value::Number(l), Value::Number(r)) => Ok(func(l, r)),
+        _ => Err(RuntimeError::TypeMismatch(0)),
     }
 }
 

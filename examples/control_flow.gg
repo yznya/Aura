@@ -1,0 +1,84 @@
+if (true) {
+    print "true";
+} else  {
+    print "false";
+}
+
+if (5 == 5) {
+    print "five";
+}
+
+let x = 10;
+if (x == 5) {
+    print "five";
+} else {
+    print "not five";
+}
+
+if (x == 5) {
+    print "five";
+} else if (x == 10) {
+    print "ten";
+} else {
+    print "not five";
+}
+
+x = 0;
+
+while (x < 5) {
+    print x;
+    x = x + 1;
+}
+
+while (x >= 0) {
+    print x;
+    x = x - 1;
+}
+
+for (let x = 0; x < 5; x = x + 1) {
+    print x;
+}
+
+print x;
+
+for (x = 0; x < 5; x = x + 1) {
+    print x;
+}
+
+if (true and true) {
+    print "logic works";
+} else {
+    print "logic fails";
+}
+
+if (true and false) {
+    print "logic fails";
+}
+
+if (false and true) {
+    print "logic fails";
+}
+
+if (false and false) {
+    print "logic fails";
+}
+
+
+
+if (true or true) {
+    print "logic works";
+} else {
+    print "logic fails";
+}
+
+if (true or false) {
+    print "logic works";
+}
+
+if (false or true) {
+    print "logic works";
+}
+
+if (false or false) {
+    print "logic fails";
+}

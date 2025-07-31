@@ -1,6 +1,6 @@
 use std::env;
 
-use at::Interpreter;
+use tlox::Interpreter;
 
 fn main() {
     let args: Vec<_> = env::args().collect();

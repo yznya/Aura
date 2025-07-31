@@ -70,6 +70,15 @@ pub enum Stmt {
     Block {
         statements: Vec<Stmt>,
     },
+    If {
+        condition: Expr,
+        then_branch: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
+    },
+    While {
+        condition: Option<Expr>,
+        loop_block: Box<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +86,11 @@ pub enum ExprType {
     Assign {
         name: Token,
         expression: Box<Expr>,
+    },
+    LogicalBinary {
+        left: Box<Expr>,
+        operator: BinaryOperator,
+        right: Box<Expr>,
     },
     Binary {
         left: Box<Expr>,
@@ -205,8 +219,158 @@ impl<'a> Parser<'a> {
         match token.token_type {
             TokenType::Print => self.print_stmt(),
             TokenType::LeftBrace => self.block_stmt(),
+            TokenType::If => self.if_stmt(),
+            TokenType::While => self.while_stmt(),
+            TokenType::For => self.for_stmt(),
             _ => self.expression_stmt(),
         }
+    }
+
+    fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let for_token = self.tokens.next().unwrap();
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::LeftParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(for_token.line));
+        }
+
+        let mut initializer = None;
+        if let Some(next_token) = self.tokens.peek()
+            && next_token.token_type != TokenType::Semicolon
+        {
+            println!("parsing init");
+            if next_token.token_type == TokenType::Let {
+                initializer = Some(self.variable()?)
+            } else {
+                initializer = Some(Stmt::Expression(self.expr()?));
+                self.tokens.next();
+            }
+        }
+
+        let mut condition = None;
+        if let Some(next_token) = self.tokens.peek()
+            && next_token.token_type != TokenType::Semicolon
+        {
+            println!("parsing condition");
+            condition = Some(self.expr()?);
+            self.tokens.next();
+        }
+
+        let mut increment = None;
+        if let Some(next_token) = self.tokens.peek()
+            && next_token.token_type != TokenType::RightParen
+        {
+            println!("parsing increment");
+            increment = Some(self.expr()?);
+        }
+
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::RightParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(for_token.line));
+        }
+
+        let mut loop_block = self.block_stmt()?;
+        if let Some(increment) = increment {
+            if let Stmt::Block { ref mut statements } = loop_block {
+                statements.push(Stmt::Expression(increment));
+            }
+        }
+
+        let mut statements = Vec::new();
+        if let Some(initializer) = initializer {
+            statements.push(initializer);
+        }
+
+        let while_loop = Stmt::While {
+            condition,
+            loop_block: Box::new(loop_block),
+        };
+
+        statements.push(while_loop);
+
+        Ok(Stmt::Block { statements })
+    }
+
+    fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let while_token = self.tokens.next().unwrap();
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::LeftParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(while_token.line));
+        }
+
+        let mut condition = None;
+        if let Some(next_token) = self.tokens.peek()
+            && next_token.token_type != TokenType::RightParen
+        {
+            condition = Some(self.expr()?);
+        }
+
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::RightParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(while_token.line));
+        }
+
+        let loop_block = self.block_stmt()?;
+
+        Ok(Stmt::While {
+            condition,
+            loop_block: Box::new(loop_block),
+        })
+    }
+
+    fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let if_token = self.tokens.next().unwrap();
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::LeftParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(if_token.line));
+        }
+
+        let condition = self.expr()?;
+
+        if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::RightParen)
+            .is_none()
+        {
+            return Err(ParseError::SyntaxError(if_token.line));
+        }
+
+        let then_branch = self.block_stmt()?;
+        let else_branch = if self
+            .tokens
+            .next_if(|v| v.token_type == TokenType::Else)
+            .is_some()
+        {
+            if let Some(next_token) = self.tokens.peek()
+                && next_token.token_type == TokenType::If
+            {
+                Some(Box::new(self.if_stmt()?))
+            } else {
+                Some(Box::new(self.block_stmt()?))
+            }
+        } else {
+            None
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_branch: Box::new(then_branch),
+            else_branch,
+        })
     }
 
     fn block_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -251,7 +415,7 @@ impl<'a> Parser<'a> {
 
     fn assignment(&mut self) -> Result<Expr, ParseError> {
         let token = self.tokens.peek().map(|v| (*v).clone()).clone();
-        let expr = self.equality()?;
+        let expr = self.or()?;
 
         if self
             .tokens
@@ -277,11 +441,56 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.and()?;
+
+        while let Some(token) = self.tokens.next_if(|t| {
+            t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
+                && t.token_type == TokenType::Or
+        }) {
+            let right = self.and()?;
+
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::LogicalBinary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
+            };
+        }
+        Ok(expr)
+    }
+
+    fn and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.equality()?;
+
+        while let Some(token) = self.tokens.next_if(|t| {
+            t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
+                && t.token_type == TokenType::And
+        }) {
+            let right = self.equality()?;
+
+            expr = Expr {
+                token: token.clone(),
+                expr_type: ExprType::LogicalBinary {
+                    left: Box::new(expr),
+                    operator: token.token_type.into(),
+                    right: Box::new(right),
+                },
+            };
+        }
+        Ok(expr)
+    }
+
     fn equality(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.comparison()?;
 
         while let Some(token) = self.tokens.next_if(|t| {
             t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
                 && matches!(t.token_type, TokenType::BangEqual | TokenType::EqualEqual)
         }) {
             let right = self.comparison()?;
@@ -303,6 +512,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.tokens.next_if(|t| {
             t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
                 && matches!(
                     t.token_type,
                     TokenType::Greater
@@ -330,6 +540,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.tokens.next_if(|t| {
             t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
                 && matches!(t.token_type, TokenType::Plus | TokenType::Minus)
         }) {
             let right = self.factor()?;
@@ -351,6 +562,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.tokens.next_if(|t| {
             t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
                 && matches!(t.token_type, TokenType::Star | TokenType::Slash)
         }) {
             let right = self.unary()?;
@@ -370,6 +582,7 @@ impl<'a> Parser<'a> {
     fn unary(&mut self) -> Result<Expr, ParseError> {
         if let Some(token) = self.tokens.next_if(|t| {
             t.token_type != TokenType::Eof
+                && t.token_type != TokenType::Semicolon
                 && matches!(t.token_type, TokenType::Bang | TokenType::Minus)
         }) {
             let right = self.unary()?;
@@ -388,16 +601,10 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> Result<Expr, ParseError> {
         if let Some(&token) = self.tokens.peek()
             && token.token_type != TokenType::Eof
+            && token.token_type != TokenType::Semicolon
         {
             let token_type = token.token_type;
-            if matches!(
-                token_type,
-                TokenType::False
-                    | TokenType::True
-                    | TokenType::Number
-                    | TokenType::String
-                    | TokenType::Nil
-            ) {
+            if matches!(token_type, |TokenType::Number| TokenType::String) {
                 self.tokens.next();
 
                 return Ok(Expr {
@@ -405,6 +612,24 @@ impl<'a> Parser<'a> {
                     expr_type: ExprType::Literal {
                         value: token.literal.as_ref().map(|literal| literal.into()),
                     },
+                });
+            }
+
+            if matches!(
+                token_type,
+                TokenType::False | TokenType::True | TokenType::Nil
+            ) {
+                self.tokens.next();
+                let value = match token_type {
+                    TokenType::False => Value::Boolean(false),
+                    TokenType::True => Value::Boolean(true),
+                    TokenType::Nil => Value::Nil,
+                    _ => unreachable!(),
+                };
+
+                return Ok(Expr {
+                    token: token.clone(),
+                    expr_type: ExprType::Literal { value: Some(value) },
                 });
             }
 

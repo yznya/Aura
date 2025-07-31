@@ -1,6 +1,7 @@
 [workspace]
-members = ["aura_t"]
+members = ["tlox"]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+thiserror = "2.0.12"

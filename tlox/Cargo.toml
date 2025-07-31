@@ -1,9 +1,9 @@
 [package]
-name = "at"
+name = "tlox"
 version = "0.1.0"
 edition = "2024"
-default-run = "at"
+default-run = "tlox"
 
 [dependencies]
 anyhow.workspace = true
-thiserror = "2.0.12"
+thiserror.workspace = true

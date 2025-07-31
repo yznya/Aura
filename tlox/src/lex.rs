@@ -146,17 +146,17 @@ pub fn scan_tokens(script: &str) -> Result<Vec<Token>, ScanError> {
             '<' => {
                 if let Some(next_char) = chars.next_if_eq(&'=') {
                     lexeme.push(next_char);
-                    TokenType::Less
-                } else {
                     TokenType::LessEqual
+                } else {
+                    TokenType::Less
                 }
             }
             '>' => {
                 if let Some(next_char) = chars.next_if_eq(&'=') {
                     lexeme.push(next_char);
-                    TokenType::Greater
-                } else {
                     TokenType::GreaterEqual
+                } else {
+                    TokenType::Greater
                 }
             }
             '/' => {
